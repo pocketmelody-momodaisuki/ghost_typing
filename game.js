@@ -1,374 +1,386 @@
-// 戻しました。
-// ===============================
-//  iPhone判定（Safari専用対策）
-// ===============================
-const isiPhone = /iPhone|iPad|iPod/i.test(navigator.userAgent);
-
-// iPhoneだけスクロール禁止
-if (isiPhone) {
-document.addEventListener("touchmove", e => e.preventDefault(), { passive: false });
-document.addEventListener("touchstart", e => e.preventDefault(), { passive: false });
-document.body.style.overflow = "hidden";
-}
-
-// ===============================
-//  Canvas 初期化（内部座標は固定）
-// ===============================
 const canvas = document.getElementById("gameCanvas");
 const ctx = canvas.getContext("2d");
 
-// 内部座標は固定（800×400）
-canvas.width = 800;
-canvas.height = 400;
+const input = document.getElementById("typingInput");
+const seCorrect = document.getElementById("seCorrect");
+const seMiss = document.getElementById("seMiss");
+const seResult = document.getElementById("seResult");
 
-// iPhoneでは表示サイズだけ縮小（内部座標はそのまま）
-function applyDisplaySize() {
-if (isiPhone) {
-canvas.style.width = "100vw";
+const ghostNormal = new Image();
+ghostNormal.src = "ghost_normal.png";
+const ghostHappy = new Image();
+ghostHappy.src = "ghost_happy.png";
+const ghostSad = new Image();
+ghostSad.src = "ghost_sad.png";
 
-// iPhoneの向きを判定
-if (window.innerHeight > window.innerWidth) {
-// ★ 縦向き（今まで通り）
-canvas.style.height = "50vw";
-} else {
-// ★ 横向き（高さを増やす）
-            canvas.style.height = "100vw";
-            canvas.style.height = "50vw";
-}
-
-} else {
-canvas.style.width = "800px";
-canvas.style.height = "400px";
-}
-}
-
-applyDisplaySize();
-window.addEventListener("resize", applyDisplaySize);
-
-// ===============================
-//  ゲーム画像
-// ===============================
-let ghost1 = new Image();
-ghost1.src = "ghost_walk1.png";
-let ghost2 = new Image();
-ghost2.src = "ghost_walk2.png";
-
-let blockImg = new Image();
-blockImg.src = "block.png";
-
-let targetImg = new Image();
-targetImg.src = "target.png";
-
-// ===============================
-//  効果音
-// ===============================
-let stretchSound = new Audio("stretch.wav");
-let hitBlockSound = new Audio("hit_block.wav");
-let hitTargetSound = new Audio("hit_target.wav");
-let hitGroundSound = new Audio("hit_ground.wav");
-let launchSound = new Audio("launch.wav");
-let clearSound = new Audio("clear.wav");
-let gameoverSound = new Audio("gameover.wav");
-
-// ===============================
-//  ゲーム状態
-// ===============================
-let ghost = {
-x: 100,
-y: 200,   // ★ PCでさらに引っ張りやすいように上げた（250→200）
-vx: 0,
-vy: 0,
-radius: 25,
-dragging: false,
-waiting: true,
-frozen: false
-};
-
-let lives = 3;
-let cleared = false;
-let wasOnGround = false;
-
-let tryText = "";
-let tryTextTimer = 0;
-
-const gravity = 0.4;
-const bounce = 0.6;
-
-const slingX = 100;
-const slingY = 200;
-
-let target = { x: 700, y: 350, radius: 30 };
-
-// ===============================
-//  障害物（3段）
-// ===============================
-let blocks = [
-{ x: 500, y: 300, w: 60, h: 60, alive: true },
-{ x: 560, y: 300, w: 60, h: 60, alive: true },
-{ x: 620, y: 300, w: 60, h: 60, alive: true },
-{ x: 530, y: 240, w: 60, h: 60, alive: true },
-{ x: 590, y: 240, w: 60, h: 60, alive: true },
-{ x: 560, y: 180, w: 60, h: 60, alive: true }
+// ---------------------------
+// 単語辞書（読み付き）
+// ---------------------------
+const words = [
+  { jp: "雨", hira: "あめ" },
+  { jp: "雷", hira: "かみなり" },
+  { jp: "虹", hira: "にじ" },
+  { jp: "月", hira: "つき" },
+  { jp: "青空", hira: "あおぞら" },
+  { jp: "曇り", hira: "くもり" },
+  { jp: "快晴", hira: "かいせい" },
+  { jp: "気球", hira: "ききゅう" },
+  { jp: "星座", hira: "せいざ" },
+  { jp: "太陽", hira: "たいよう" },
+  { jp: "雲間", hira: "くもま" },
+  { jp: "凧揚げ", hira: "たこあげ" },
+  { jp: "望遠鏡", hira: "ぼうえんきょう" },
+  { jp: "夕焼け", hira: "ゆうやけ" },
+  { jp: "あられ", hira: "あられ" },
+  { jp: "ひょう", hira: "ひょう" },
+  { jp: "流れ星", hira: "ながれぼし" },
+  { jp: "飛行機", hira: "ひこうき" },
+  { jp: "ツバメ", hira: "つばめ" },
+  { jp: "トンボ", hira: "とんぼ" }
 ];
 
-// ===============================
-//  Try 表示
-// ===============================
-function showTryText() {
-if (lives === 3) tryText = "1st Try";
-else if (lives === 2) tryText = "2nd Try";
-else if (lives === 1) tryText = "Last Try";
+let gameState = "title";
+let currentWord = "";
+let hiraWord = "";
+let romaCandidates = [];
 
-tryTextTimer = 60;
+let score = 0;
+let timeLimit = 30;
+let startTime = 0;
+
+let ghostFace = "normal";
+let faceTimer = 0;
+
+let effect = null;
+
+let resultRank = "";
+let resultMessage = "";
+
+// ---------------------------
+// ひらがな → ローマ字（複数方式対応）
+// ---------------------------
+function hiraToRoma(hira) {
+    const table = {
+        "あ":"a","い":"i","う":"u","え":"e","お":"o",
+        "か":"ka","き":"ki","く":"ku","け":"ke","こ":"ko",
+        "さ":"sa","し":["shi","si"],"す":"su","せ":"se","そ":"so",
+        "た":"ta","ち":["chi","ti"],"つ":["tsu","tu"],"て":"te","と":"to",
+        "な":"na","に":"ni","ぬ":"nu","ね":"ne","の":"no",
+        "は":"ha","ひ":"hi","ふ":["fu","hu"],"へ":"he","ほ":"ho",
+        "ま":"ma","み":"mi","む":"mu","め":"me","も":"mo",
+        "や":"ya","ゆ":"yu","よ":"yo",
+        "ら":"ra","り":"ri","る":"ru","れ":"re","ろ":"ro",
+        "わ":"wa","を":"wo","ん":"n",
+        "が":"ga","ぎ":"gi","ぐ":"gu","げ":"ge","ご":"go",
+        "ざ":"za","じ":["ji","zi"],"ず":"zu","ぜ":"ze","ぞ":"zo",
+        "だ":"da","ぢ":["ji","di"],"づ":["zu","du"],"で":"de","ど":"do",
+        "ぱ":"pa","ぴ":"pi","ぷ":"pu","ぺ":"pe","ぽ":"po",
+        // ★ ここを追加
+        "ば":"ba","び":"bi","ぶ":"bu","べ":"be","ぼ":"bo",
+        // ★ ここまで
+        "きゃ":"kya","きゅ":"kyu","きょ":"kyo",
+        "しゃ":["sha","sya"],"しゅ":["shu","syu"],"しょ":["sho","syo"],
+        "ちゃ":["cha","tya"],"ちゅ":["chu","tyu"],"ちょ":["cho","tyo"],
+        "にゃ":"nya","にゅ":"nyu","にょ":"nyo",
+        "ひゃ":"hya","ひゅ":"hyu","ひょ":"hyo",
+        "みゃ":"mya","みゅ":"myu","みょ":"myo",
+        "りゃ":"rya","りゅ":"ryu","りょ":"ryo"
+    };
+
+
+    let result = [""];
+    let i = 0;
+
+    while (i < hira.length) {
+        let chunk = hira[i];
+
+        if (i + 1 < hira.length) {
+            const two = hira[i] + hira[i + 1];
+            if (table[two]) {
+                const romaList = Array.isArray(table[two]) ? table[two] : [table[two]];
+                result = result.flatMap(r => romaList.map(rr => r + rr));
+                i += 2;
+                continue;
+            }
+        }
+
+        const romaList = Array.isArray(table[chunk]) ? table[chunk] : [table[chunk]];
+        result = result.flatMap(r => romaList.map(rr => r + rr));
+        i++;
+    }
+
+    return result;
 }
 
-// ===============================
-//  pointer イベント（iPhoneだけ座標変換）
-// ===============================
-function getPointerPos(e) {
-let rect = canvas.getBoundingClientRect();
-return {
-x: (e.clientX - rect.left) * (canvas.width / rect.width),
-y: (e.clientY - rect.top) * (canvas.height / rect.height)
-};
+// ---------------------------
+// ゲーム開始
+// ---------------------------
+function startGame() {
+    score = 0;
+    startTime = Date.now();
+    ghostFace = "normal";
+    faceTimer = 0;
+    effect = null;
+
+    pickWord();
+
+    input.value = "";
+    input.disabled = false;
+    input.focus();
+
+    gameState = "play";
 }
 
-canvas.addEventListener("pointerdown", (e) => {
-if (isiPhone) e.preventDefault();
-
-if (ghost.frozen) return;
-
-let pos = getPointerPos(e);
-
-let dx = pos.x - ghost.x;
-let dy = pos.y - ghost.y;
-
-if (dx * dx + dy * dy < ghost.radius * ghost.radius) {
-ghost.dragging = true;
-ghost.waiting = false;
-stretchSound.currentTime = 0;
-stretchSound.play();
+function pickWord() {
+    const w = words[Math.floor(Math.random() * words.length)];
+    currentWord = w.jp;
+    hiraWord = w.hira;
+    romaCandidates = hiraToRoma(hiraWord);
 }
-}, { passive: false });
 
-canvas.addEventListener("pointermove", (e) => {
-if (isiPhone) e.preventDefault();
+// ---------------------------
+// 判定
+// ---------------------------
+function checkAnswer() {
+    const user = input.value.trim().toLowerCase();
 
-if (ghost.dragging && !ghost.frozen) {
-let pos = getPointerPos(e);
-ghost.x = pos.x;
-ghost.y = pos.y;
+    for (const r of romaCandidates) {
+        if (user === r) {
+            onCorrect();
+            return;
+        }
+    }
+    onMiss();
 }
-}, { passive: false });
 
-canvas.addEventListener("pointerup", (e) => {
-if (isiPhone) e.preventDefault();
+function onCorrect() {
+    score++;
+    ghostFace = "happy";
+    faceTimer = 60;
+    effect = { type: "correct", timer: 40 };
+    seCorrect.currentTime = 0;
+    seCorrect.play();
 
-if (ghost.dragging && !ghost.frozen) {
-ghost.dragging = false;
-
-ghost.vx = (slingX - ghost.x) * 0.15;
-ghost.vy = (slingY - ghost.y) * 0.15;
-
-stretchSound.pause();
-launchSound.play();
+    pickWord();
+    input.value = "";
 }
-}, { passive: false });
 
-// ===============================
-//  ゲーム更新
-// ===============================
-let ghostFrame = 0;
-let ghostAnimTimer = 0;
+function onMiss() {
+    ghostFace = "sad";
+    faceTimer = 60;
+    effect = { type: "miss", timer: 40 };
+    seMiss.currentTime = 0;
+    seMiss.play();
+}
+
+// ---------------------------
+// リザルト評価
+// ---------------------------
+function evaluateScore() {
+    if (score >= 20) {
+        resultRank = "達人級！";
+        resultMessage = "すごい！あなたはタイピングの達人級！";
+    } else if (score >= 10) {
+        resultRank = "玄人級！";
+        resultMessage = "やるね！あなたは玄人級！";
+    } else if (score >= 5) {
+        resultRank = "新社会人級！";
+        resultMessage = "もっと上を目指そう！";
+    } else {
+        resultRank = "初心者級！";
+        resultMessage = "まだまだ初心者級！がんばろう！";
+    }
+}
+
+// ---------------------------
+// 入力イベント
+// ---------------------------
+input.addEventListener("keydown", e => {
+    if (gameState !== "play") return;
+    if (e.key === "Enter") {
+        checkAnswer();
+    }
+});
+
+// ---------------------------
+// キー操作（開始・再スタート）
+// ---------------------------
+document.addEventListener("keydown", e => {
+    if (gameState === "title" && e.key === "Enter") {
+        startGame();
+    } else if (gameState === "result" && e.key === "Enter") {
+        gameState = "title";
+    }
+});
+
+// ---------------------------
+// 描画
+// ---------------------------
+function drawGhost(x, y) {
+    let img = ghostNormal;
+    if (ghostFace === "happy") img = ghostHappy;
+    else if (ghostFace === "sad") img = ghostSad;
+
+    const size = 160;
+    ctx.drawImage(img, x - size / 2, y - size / 2, size, size);
+}
+
+function drawEffect(x, y) {
+    if (!effect) return;
+    const t = effect.timer;
+    const progress = (40 - t) / 40;
+    const baseRadius = 60 + progress * 40;
+
+    let innerColor, outerColor;
+    if (effect.type === "correct") {
+        innerColor = "rgba(0,255,255,0.9)";
+        outerColor = "rgba(255,255,255,0)";
+    } else {
+        innerColor = "rgba(255,0,0,0.9)";
+        outerColor = "rgba(255,255,255,0)";
+    }
+
+    const grad = ctx.createRadialGradient(x, y, 10, x, y, baseRadius + 40);
+    grad.addColorStop(0, innerColor);
+    grad.addColorStop(1, outerColor);
+
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(x, y, baseRadius + 20, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.arc(x, y, baseRadius, 0, Math.PI * 2);
+    ctx.strokeStyle = "white";
+    ctx.lineWidth = 3;
+    ctx.stroke();
+}
+
+function drawRomaGuide() {
+    const user = input.value.trim().toLowerCase();
+    const target = romaCandidates[0];
+
+    let matchLen = 0;
+    for (let i = 0; i < user.length; i++) {
+        if (target[i] === user[i]) matchLen++;
+        else break;
+    }
+
+    ctx.font = "28px monospace";
+
+    const centerX = canvas.width / 2;
+    const y = canvas.height * 0.82;
+
+    // ① 灰色の全体を中央揃えで描く
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#888";
+    ctx.fillText(target, centerX, y);
+
+    // ② 左端の位置を計算（中央揃えのため）
+    const fullWidth = ctx.measureText(target).width;
+    const leftX = centerX - fullWidth / 2;
+
+    // ③ 青い部分だけ左揃えで重ね描き
+    ctx.textAlign = "left";
+    ctx.fillStyle = "#4cf";
+    ctx.fillText(target.slice(0, matchLen), leftX, y);
+}
+
+
+
+function drawTitle() {
+    ctx.fillStyle = "#000";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.fillStyle = "#fff";
+    ctx.textAlign = "center";
+
+    ctx.font = "64px sans-serif";
+    ctx.fillText("Ghost Typing", canvas.width / 2, canvas.height * 0.35);
+
+    ctx.font = "28px sans-serif";
+    ctx.fillText("Enterキーでスタート", canvas.width / 2, canvas.height * 0.55);
+}
+
+function drawPlay() {
+    ctx.fillStyle = "#000";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    const elapsed = (Date.now() - startTime) / 1000;
+    const remain = Math.max(0, timeLimit - elapsed);
+
+    if (remain <= 0) {
+        gameState = "result";
+        input.disabled = true;
+        seResult.currentTime = 0;
+        seResult.play();
+        evaluateScore();
+    }
+
+    ctx.fillStyle = "#fff";
+    ctx.textAlign = "left";
+    ctx.font = "24px sans-serif";
+    ctx.fillText(`Score: ${score}`, 20, 40);
+    ctx.fillText(`Time: ${remain.toFixed(1)}s`, 20, 80);
+
+    const gx = canvas.width / 2;
+    const gy = canvas.height * 0.45;
+
+    drawEffect(gx, gy);
+    drawGhost(gx, gy);
+
+    ctx.textAlign = "center";
+    ctx.font = "32px sans-serif";
+    ctx.fillStyle = "#0ff";
+    ctx.fillText(currentWord, canvas.width / 2, canvas.height * 0.75);
+
+    drawRomaGuide();
+}
+
+function drawResult() {
+    ctx.fillStyle = "#000";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#fff";
+
+    ctx.font = "56px sans-serif";
+    ctx.fillText("RESULT", canvas.width / 2, canvas.height * 0.25);
+
+    ctx.font = "32px sans-serif";
+    ctx.fillText(`Score: ${score}`, canvas.width / 2, canvas.height * 0.40);
+
+    ctx.font = "32px sans-serif";
+    ctx.fillText(resultRank, canvas.width / 2, canvas.height * 0.52);
+
+    ctx.font = "22px sans-serif";
+    ctx.fillText(resultMessage, canvas.width / 2, canvas.height * 0.60);
+
+    ctx.font = "24px sans-serif";
+    ctx.fillText("Enterキーでタイトルへ戻る", canvas.width / 2, canvas.height * 0.80);
+}
 
 function update() {
+    if (faceTimer > 0) {
+        faceTimer--;
+        if (faceTimer <= 0) ghostFace = "normal";
+    }
 
-if (ghost.frozen) return;
-
-// 重力（引っ張り中は無効）
-if (!ghost.dragging && !ghost.waiting) {
-ghost.vy += gravity;
-ghost.x += ghost.vx;
-ghost.y += ghost.vy;
+    if (effect && effect.timer > 0) {
+        effect.timer--;
+        if (effect.timer <= 0) effect = null;
+    }
 }
 
-// 壁判定（★音を鳴らさないように修正）
-if (ghost.x < ghost.radius) {
-ghost.x = ghost.radius;
-ghost.vx *= -bounce;
-}
-if (ghost.x > canvas.width - ghost.radius) {
-ghost.x = canvas.width - ghost.radius;
-ghost.vx *= -bounce;
-}
-if (ghost.y < ghost.radius) {
-ghost.y = ghost.radius;
-ghost.vy *= -bounce;
-}
-
-// 地面落下判定
-if (!ghost.waiting && !ghost.dragging) {
-let onGround = ghost.y >= canvas.height - ghost.radius;
-
-if (onGround) {
-ghost.y = canvas.height - ghost.radius;
-
-if (!wasOnGround) {
-hitGroundSound.currentTime = 0;
-hitGroundSound.play();
-reset();
-}
-}
-wasOnGround = onGround;
-}
-
-// アニメーション
-ghostAnimTimer++;
-if (ghostAnimTimer % 10 === 0) {
-ghostFrame = (ghostFrame + 1) % 2;
-}
-
-if (tryTextTimer > 0) tryTextTimer--;
-
-// ★ 引っ張り中は障害物判定を無効化
-if (!ghost.dragging && !ghost.waiting && !ghost.frozen) {
-blocks.forEach(block => {
-if (!block.alive) return;
-
-let hit =
-ghost.x + ghost.radius > block.x &&
-ghost.x - ghost.radius < block.x + block.w &&
-ghost.y + ghost.radius > block.y &&
-ghost.y - ghost.radius < block.y + block.h;
-
-if (!hit) return;
-
-block.alive = false;
-hitBlockSound.play();
-
-ghost.vx *= -0.5;
-ghost.vy = -2;
-});
-}
-
-// ★ クリア判定
-let dx = ghost.x - target.x;
-let dy = ghost.y - target.y;
-
-if (!cleared && dx * dx + dy * dy < (ghost.radius + target.radius) ** 2) {
-
-cleared = true;
-ghost.frozen = true;
-ghost.vx = 0;
-ghost.vy = 0;
-
-clearSound.currentTime = 0;
-clearSound.play();
-
-setTimeout(() => {
-alert("クリア！");
-fullReset();
-}, 600);
-}
-}
-
-// ===============================
-//  リセット処理
-// ===============================
-function fullReset() {
-lives = 3;
-
-ghost.x = slingX;
-ghost.y = slingY;
-ghost.vx = 0;
-ghost.vy = 0;
-ghost.waiting = true;
-ghost.frozen = false;
-
-blocks.forEach(b => b.alive = true);
-
-cleared = false;
-
-showTryText();
-}
-
-function reset() {
-lives--;
-
-if (lives <= 0) {
-
-ghost.frozen = true;
-
-gameoverSound.currentTime = 0;
-gameoverSound.play();
-
-setTimeout(() => {
-alert("ゲームオーバー！");
-fullReset();
-}, 600);
-
-return;
-}
-
-ghost.x = slingX;
-ghost.y = slingY;
-ghost.vx = 0;
-ghost.vy = 0;
-ghost.waiting = true;
-
-showTryText();
-}
-
-// ===============================
-//  描画
-// ===============================
-function draw() {
-ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-if (tryTextTimer > 0) {
-ctx.fillStyle = "yellow";
-ctx.font = "30px sans-serif";
-ctx.fillText(tryText, 20, 70);
-}
-
-ctx.fillStyle = "white";
-ctx.font = "20px sans-serif";
-ctx.fillText("Ghost: " + lives, 20, 30);
-
-if (ghost.dragging) {
-ctx.strokeStyle = "yellow";
-ctx.lineWidth = 3;
-ctx.beginPath();
-ctx.moveTo(slingX, slingY);
-ctx.lineTo(ghost.x, ghost.y);
-ctx.stroke();
-}
-
-blocks.forEach(block => {
-if (block.alive) {
-ctx.drawImage(blockImg, block.x, block.y, block.w, block.h);
-}
-});
-
-let img = ghostFrame === 0 ? ghost1 : ghost2;
-ctx.drawImage(img, ghost.x - ghost.radius, ghost.y - ghost.radius, ghost.radius * 2, ghost.radius * 2);
-
-ctx.drawImage(
-targetImg,
-target.x - target.radius,
-target.y - target.radius,
-target.radius * 2,
-target.radius * 2
-);
-}
-
-// ===============================
-//  メインループ
-// ===============================
 function loop() {
-update();
-draw();
-requestAnimationFrame(loop);
+    update();
+
+    if (gameState === "title") drawTitle();
+    else if (gameState === "play") drawPlay();
+    else if (gameState === "result") drawResult();
+
+    requestAnimationFrame(loop);
 }
 
+input.disabled = true;
 loop();
